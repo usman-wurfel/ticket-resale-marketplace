@@ -1,0 +1,59 @@
+name: Diagnose Frontend Match
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Compare live frontend settings/assets
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: false
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            PHP_BIN=php8.2
+            command -v php8.2 >/dev/null || PHP_BIN=php
+
+            echo "===== BASIC ====="
+            $PHP_BIN artisan tinker --execute="\$b=DB::table('basic_settings')->first(['logo','favicon','website_title','primary_color','breadcrumb','preloader','theme_version']); echo json_encode(\$b);"
+            echo "===== FOOTER ====="
+            $PHP_BIN artisan tinker --execute="echo json_encode(DB::table('footer_contents')->get(['language_id','footer_logo','footer_background_color']));"
+            echo "===== ADS ====="
+            $PHP_BIN artisan tinker --execute="echo json_encode(DB::table('advertisements')->get(['id','image','slot','resolution_type']));"
+            echo "===== MISSING BASIC FILES ====="
+            $PHP_BIN -r '
+              require "vendor/autoload.php";
+              $app=require "bootstrap/app.php";
+              $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+              $b=DB::table("basic_settings")->first();
+              foreach (["logo","favicon","breadcrumb","preloader"] as $k) {
+                $v=$b->$k ?? null;
+                if(!$v){ echo "$k=EMPTY\n"; continue; }
+                $p="public/assets/admin/img/$v";
+                echo "$k=$v|".(is_file($p)?"OK":"MISSING")."|".(is_file($p)?filesize($p):0)."\n";
+              }
+              $f=DB::table("footer_contents")->value("footer_logo");
+              $fp="public/assets/admin/img/footer_logo/$f";
+              echo "footer_logo=$f|".(is_file($fp)?"OK":"MISSING")."|".(is_file($fp)?filesize($fp):0)."\n";
+              foreach(DB::table("advertisements")->get(["id","image"]) as $a){
+                $p="public/assets/admin/img/advertisements/{$a->image}";
+                echo "ad{$a->id}={$a->image}|".(is_file($p)?"OK":"MISSING")."|".(is_file($p)?filesize($p):0)."\n";
+              }
+            '
+            echo "===== EVENT THUMB SAMPLE ====="
+            $PHP_BIN artisan tinker --execute="foreach(DB::table('events')->limit(8)->get(['id','thumbnail']) as \$e){\$p='public/assets/admin/img/event/thumbnail/'.\$e->thumbnail; echo \$e->id.'|'.\$e->thumbnail.'|'.(is_file(\$p)?'OK':'MISSING').PHP_EOL;}"
+            echo "===== CATEGORY IMAGES ====="
+            $PHP_BIN artisan tinker --execute="if(Schema::hasTable('categories')){foreach(DB::table('categories')->limit(10)->get() as \$c){ echo json_encode(\$c).PHP_EOL; }} elseif(Schema::hasTable('event_categories')){foreach(DB::table('event_categories')->limit(10)->get() as \$c){ echo json_encode(\$c).PHP_EOL; }}"
+            echo "===== HOME SECTIONS FILES ====="
+            ls -la public/assets/admin/img/hero-section 2>/dev/null | head -n 15 || true
+            ls -la public/assets/admin/img/action-section 2>/dev/null | head -n 15 || true
+            ls -la public/assets/admin/img/event-category 2>/dev/null | head -n 15 || true
+            echo DONE

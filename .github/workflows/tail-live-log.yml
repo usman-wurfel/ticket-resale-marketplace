@@ -1,0 +1,32 @@
+name: Tail Live Log
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Tail laravel log
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            ls -la storage/logs | tail -n 20
+            LOG=$(ls -t storage/logs/laravel*.log 2>/dev/null | head -n1 || true)
+            echo "LOG=$LOG"
+            if [ -n "$LOG" ]; then
+              tail -n 120 "$LOG"
+            else
+              echo "No laravel log found"
+            fi

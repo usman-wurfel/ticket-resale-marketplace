@@ -1,0 +1,53 @@
+name: Sync Frontend Parity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore admin image folders from repo
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "public/assets/admin/img,public/assets/front,scripts/sync-frontend-parity.php"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
+          strip_components: 0
+
+      - name: Repair only missing files + clear caches
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            PHP_BIN=php8.2
+            command -v php8.2 >/dev/null || PHP_BIN=php
+
+            $PHP_BIN scripts/sync-frontend-parity.php
+
+            $PHP_BIN artisan config:clear || true
+            $PHP_BIN artisan view:clear || true
+            $PHP_BIN artisan cache:clear || true
+            $PHP_BIN artisan config:cache || true
+
+            echo "===== SAMPLE ====="
+            ls -la public/assets/admin/img/event-category/64562bfad4d11.png
+            ls -la public/assets/admin/img/footer_logo/1776854970.png
+            echo DONE

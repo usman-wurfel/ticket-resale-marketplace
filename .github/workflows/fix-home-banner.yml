@@ -1,0 +1,49 @@
+name: Fix Home Banner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload correct hero banner + CSS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "public/assets/admin/img/hero-section/629ec0bd9c0b0.jpg,public/assets/admin/img/hero-section/627cf56fdf611.jpg,public/assets/front/images/hero-bg.jpg,public/assets/front/css/style.css,scripts/fix-home-banner.php"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
+          strip_components: 0
+
+      - name: Force restore banner file + cache clear
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            PHP_BIN=php8.2
+            command -v php8.2 >/dev/null || PHP_BIN=php
+
+            $PHP_BIN scripts/fix-home-banner.php
+
+            $PHP_BIN artisan view:clear || true
+            $PHP_BIN artisan cache:clear || true
+            $PHP_BIN artisan config:cache || true
+
+            file public/assets/admin/img/hero-section/629ec0bd9c0b0.jpg || ls -la public/assets/admin/img/hero-section/629ec0bd9c0b0.jpg
+            echo DONE

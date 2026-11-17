@@ -1,0 +1,105 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: SSH Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: GH_TOKEN
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+
+            APP_DIR="${{ secrets.DEPLOY_PATH }}"
+            BRANCH="${{ secrets.DEPLOY_BRANCH || 'main' }}"
+            PHP_BIN="${{ secrets.PHP_BIN }}"
+            COMPOSER_BIN="${{ secrets.COMPOSER_BIN || 'composer' }}"
+            RUN_MIGRATE="${{ secrets.DEPLOY_RUN_MIGRATE || 'false' }}"
+            REPO_SLUG="wexTeam/ticket-resale"
+            PUBLIC_ORIGIN="https://github.com/${REPO_SLUG}.git"
+
+            echo "==> Available PHP binaries (debug)"
+            command -v php php8.1 php8.2 php8.3 php81 php82 php83 2>/dev/null || true
+            ls -1 /usr/bin/php* /opt/cpanel/ea-php*/root/usr/bin/php /opt/alt/php*/usr/bin/php 2>/dev/null || true
+
+            if [ -z "$APP_DIR" ]; then
+              echo "DEPLOY_PATH secret is empty"
+              exit 1
+            fi
+
+            if [ -z "${GH_TOKEN:-}" ]; then
+              echo "GH_TOKEN missing — cannot fetch private repo"
+              exit 1
+            fi
+
+            cd "$APP_DIR"
+
+            echo "==> Deploying $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "==> Path: $APP_DIR"
+            echo "==> Branch: $BRANCH"
+
+            # Authenticated fetch for private repo (token not left on remote URL)
+            AUTH_ORIGIN="https://x-access-token:${GH_TOKEN}@github.com/${REPO_SLUG}.git"
+            git remote set-url origin "$AUTH_ORIGIN"
+            git fetch --prune origin "$BRANCH"
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            git remote set-url origin "$PUBLIC_ORIGIN"
+
+            if [ -f scripts/deploy.sh ]; then
+              chmod +x scripts/deploy.sh
+              APP_DIR="$APP_DIR" BRANCH="$BRANCH" PHP_BIN="$PHP_BIN" COMPOSER_BIN="$COMPOSER_BIN" RUN_MIGRATE="$RUN_MIGRATE" \
+                bash scripts/deploy.sh
+            else
+              echo "==> scripts/deploy.sh missing, running inline fallback"
+
+              if [ -f composer.json ]; then
+                $COMPOSER_BIN install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+              fi
+
+              if [ -f artisan ]; then
+                $PHP_BIN artisan down --retry=60 || true
+                $PHP_BIN artisan config:clear || true
+                $PHP_BIN artisan route:clear || true
+                $PHP_BIN artisan view:clear || true
+                $PHP_BIN artisan cache:clear || true
+
+                if [ "$RUN_MIGRATE" = "true" ]; then
+                  $PHP_BIN artisan migrate --force --no-interaction
+                else
+                  echo "==> Skipping migrate (set DEPLOY_RUN_MIGRATE=true to enable)"
+                fi
+
+                $PHP_BIN artisan storage:link || true
+                $PHP_BIN artisan config:cache
+                $PHP_BIN artisan route:cache
+                $PHP_BIN artisan view:cache
+                $PHP_BIN artisan up || true
+              fi
+            fi
+
+            echo "==> Deploy finished: $(git rev-parse --short HEAD)"

@@ -1,0 +1,61 @@
+name: Fix Gallery Upload Permissions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload hardened gallery code
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "app/Http/Controllers/BackEnd/Event/EventController.php,app/Http/Controllers/BackEnd/Organizer/EventController.php,app/Support/EventGalleryUploader.php,public/assets/admin/js/admin_dropzone.js,scripts/live-gallery-smoke.php"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
+
+      - name: Fix permissions and smoke test
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            PHP_BIN=php8.2
+            command -v php8.2 >/dev/null || PHP_BIN=php
+
+            mkdir -p public/assets/admin/img/event-gallery
+            mkdir -p public/assets/admin/img/event/thumbnail
+
+            chmod 777 public/assets/admin/img/event-gallery
+            chmod 777 public/assets/admin/img/event/thumbnail
+            chown -R www-data:www-data public/assets/admin/img/event-gallery || true
+            chown -R www-data:www-data public/assets/admin/img/event/thumbnail || true
+
+            echo "=== ownership ==="
+            ls -lad public/assets/admin/img/event-gallery public/assets/admin/img/event/thumbnail
+
+            echo "=== php write test ==="
+            $PHP_BIN -r '$d="public/assets/admin/img/event-gallery"; $f=$d."/_t.txt"; echo (@file_put_contents($f,"ok")===false?"PHP_WRITE_FAIL":"PHP_WRITE_OK").PHP_EOL; @unlink($f); echo "writable=".(is_writable($d)?"yes":"no").PHP_EOL;'
+
+            $PHP_BIN artisan view:clear || true
+            $PHP_BIN artisan cache:clear || true
+
+            echo "=== uploader smoke test ==="
+            $PHP_BIN scripts/live-gallery-smoke.php
+
+            echo DONE

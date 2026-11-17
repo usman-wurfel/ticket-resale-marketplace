@@ -1,0 +1,35 @@
+name: Tail Live Log Gallery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Grep gallery errors
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            echo "=== event_images columns ==="
+            PHP_BIN=php8.2; command -v php8.2 >/dev/null || PHP_BIN=php
+            $PHP_BIN artisan tinker --execute="echo collect(DB::select('SHOW COLUMNS FROM event_images'))->map(fn(\$c)=>\$c->Field.'|'.\$c->Type.'|'.\$c->Null)->implode(PHP_EOL);"
+            echo "=== recent gallery/log errors ==="
+            grep -n "gallerystore\|event-imagesstore\|event_images\|Could not save\|dimensions\|SQLSTATE\|production.ERROR" storage/logs/laravel.log | tail -n 40 || true
+            echo "=== last 40 ERROR lines ==="
+            grep "production.ERROR" storage/logs/laravel.log | tail -n 15 || true
+            echo "=== dir perms ==="
+            ls -la public/assets/admin/img/event-gallery | head -n 5
+            touch public/assets/admin/img/event-gallery/_write_test && rm -f public/assets/admin/img/event-gallery/_write_test && echo WRITE_OK || echo WRITE_FAIL
+            echo DONE

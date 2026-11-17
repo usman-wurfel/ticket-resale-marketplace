@@ -1,0 +1,47 @@
+name: Diagnose Live Assets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check images, APP_URL, colors
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: false
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.DEPLOY_PATH }}"
+            cd "$APP_DIR"
+            PHP_BIN=php8.2
+            command -v php8.2 >/dev/null || PHP_BIN=php
+
+            echo "===== PWD ====="
+            pwd
+            echo "===== APP_URL / ASSET ====="
+            grep -E '^(APP_URL|ASSET_URL|APP_ENV)=' .env || true
+            echo "===== LOGO/FAVICON/COLOR FROM DB ====="
+            $PHP_BIN artisan tinker --execute="echo json_encode(\\App\\Models\\BasicSettings\\Basic::query()->first(['logo','favicon','primary_color','website_title']));"
+            echo "===== FILE CHECKS ====="
+            LOGO=$($PHP_BIN artisan tinker --execute="echo \\App\\Models\\BasicSettings\\Basic::value('logo');" 2>/dev/null | tail -n1)
+            echo "logo db value: [$LOGO]"
+            ls -la "public/assets/admin/img/$LOGO" 2>&1 || true
+            ls -la public/assets/admin/img/event/thumbnail | head -n 20
+            ls -la public/assets/admin/img/advertisements 2>&1 | head -n 20
+            echo "===== PUBLIC ACCESS TEST ====="
+            if [ -n "$LOGO" ]; then
+              $PHP_BIN -r "echo file_exists('public/assets/admin/img/' . trim('$LOGO')) ? 'logo_exists=1' : 'logo_exists=0';"
+              echo
+            fi
+            echo "===== DOCROOT HINT ====="
+            ls -la public/index.php
+            ls -la index.php 2>&1 || true
+            echo "===== SAMPLE EVENT THUMBS FROM DB ====="
+            $PHP_BIN artisan tinker --execute="foreach(\\App\\Models\\Event::query()->limit(5)->get(['id','thumbnail']) as \$e){ \$p='public/assets/admin/img/event/thumbnail/'.\$e->thumbnail; echo \$e->id.'|'.\$e->thumbnail.'|'.(is_file(\$p)?'OK':'MISSING').PHP_EOL; }"
